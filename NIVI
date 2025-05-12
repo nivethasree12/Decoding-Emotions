@@ -1,0 +1,133 @@
+# Decoding Emotions Through Sentiment Analysis of Social Media Conversations
+
+# -----------------------------
+# 1. Import Libraries
+# -----------------------------
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from wordcloud import WordCloud
+from textblob import TextBlob
+import re
+import string
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay, accuracy_score, f1_score
+
+# -----------------------------
+# 2. Load Dataset
+# -----------------------------
+df = pd.read_csv('data/emotions.csv')  # Ensure this file exists in the /data folder
+print(df.head())
+
+# -----------------------------
+# 3. Preprocessing
+# -----------------------------
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"@\w+", "", text)
+    text = re.sub(r"[^a-zA-Z\s]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+df['text_clean'] = df['text'].apply(clean_text)
+
+# Sentiment scores
+df['polarity'] = df['text_clean'].apply(lambda x: TextBlob(x).sentiment.polarity)
+df['subjectivity'] = df['text_clean'].apply(lambda x: TextBlob(x).sentiment.subjectivity)
+df['text_length'] = df['text_clean'].apply(lambda x: len(x.split()))
+df['avg_word_length'] = df['text_clean'].apply(lambda x: np.mean([len(w) for w in x.split()]))
+
+# -----------------------------
+# 4. Label Encoding
+# -----------------------------
+le = LabelEncoder()
+df['emotion_encoded'] = le.fit_transform(df['emotion'])
+
+# -----------------------------
+# 5. Vectorization (TF-IDF)
+# -----------------------------
+tfidf = TfidfVectorizer(max_features=3000)
+X_tfidf = tfidf.fit_transform(df['text_clean'])
+
+# Combine with engineered features
+from scipy.sparse import hstack
+X_engineered = df[['text_length', 'avg_word_length', 'polarity', 'subjectivity']]
+X = hstack([X_tfidf, X_engineered])
+y = df['emotion_encoded']
+
+# -----------------------------
+# 6. Train-Test Split
+# -----------------------------
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+
+# -----------------------------
+# 7. Model Training
+# -----------------------------
+
+# Logistic Regression
+log_model = LogisticRegression(max_iter=1000, multi_class='multinomial')
+log_model.fit(X_train, y_train)
+y_pred_log = log_model.predict(X_test)
+
+# Random Forest
+rf_model = RandomForestClassifier(n_estimators=100)
+rf_model.fit(X_train, y_train)
+y_pred_rf = rf_model.predict(X_test)
+
+# -----------------------------
+# 8. Evaluation
+# -----------------------------
+print("\nLogistic Regression Report:\n")
+print(classification_report(y_test, y_pred_log, target_names=le.classes_))
+
+print("\nRandom Forest Report:\n")
+print(classification_report(y_test, y_pred_rf, target_names=le.classes_))
+
+# Confusion Matrix for RF
+cm = confusion_matrix(y_test, y_pred_rf)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=le.classes_)
+disp.plot(xticks_rotation=45, cmap='Blues')
+plt.title("Random Forest Confusion Matrix")
+plt.show()
+
+# Feature Importance (Engineered Features only)
+importances = rf_model.feature_importances_[-4:]
+features = ['text_length', 'avg_word_length', 'polarity', 'subjectivity']
+sns.barplot(x=importances, y=features)
+plt.title("Engineered Feature Importances (Random Forest)")
+plt.xlabel("Importance")
+plt.show()
+
+# -----------------------------
+# 9. Word Cloud by Emotion
+# -----------------------------
+for emotion in df['emotion'].unique():
+    words = " ".join(df[df['emotion'] == emotion]['text_clean'])
+    wc = WordCloud(width=800, height=300, background_color='white').generate(words)
+    plt.figure(figsize=(10, 3))
+    plt.imshow(wc, interpolation='bilinear')
+    plt.axis('off')
+    plt.title(f"WordCloud for {emotion}")
+    plt.show()
+
+# -----------------------------
+# 10. Model Comparison Bar Chart
+# -----------------------------
+metrics = pd.DataFrame({
+    'Model': ['Logistic Regression', 'Random Forest'],
+    'Accuracy': [accuracy_score(y_test, y_pred_log), accuracy_score(y_test, y_pred_rf)],
+    'F1 Score': [f1_score(y_test, y_pred_log, average='macro'), f1_score(y_test, y_pred_rf, average='macro')]
+})
+
+metrics.set_index('Model').plot(kind='bar', colormap='viridis')
+plt.title("Model Performance Comparison")
+plt.ylabel("Score")
+plt.ylim(0, 1)
+plt.show()
